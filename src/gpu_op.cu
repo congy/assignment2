@@ -52,6 +52,48 @@ __global__ void matrix_softmax_cross_entropy_kernel(int nrow, int ncol,
   }
 }
 
+__global__ void matrix_softmax_kernel(int nrow, int ncol, const float *input_a, float *output) {
+  // Dynamic shared memory, size provided at kernel launch.
+  extern __shared__ float loss_per_row[];
+  // Two dimensional thread blocks.
+  int y = blockIdx.x * blockDim.x * blockDim.y + threadIdx.y * blockDim.x +
+          threadIdx.x;
+  if (y >= nrow) {
+    return;
+  }
+  input_a += y * ncol;
+  output += y * ncol;
+  float maxval = *input_a;
+  // Find max for a row.
+  for (int x = 1; x < ncol; ++x) {
+    maxval = max(maxval, input_a[x]);
+  }
+  // Deduct by max for a row, and raise to exp.
+  float sum = 0;
+  for (int x = 0; x < ncol; ++x) {
+    sum += exp(input_a[x] - maxval);
+  }
+  for (int x = 0; x < ncol; ++x) {
+    output[x] = exp(input_a[x] - maxval) / sum;
+  }
+}
+
+__global__ void array_relu_kernel(int64_t length, const float* input1, float *output) {
+  int y = blockIdx.x * blockDim.x + threadIdx.x;
+  if(y >= length) {
+    return;
+  }
+  output[y] = max(0.0f, input1[y]);
+}
+
+__global__ void array_relu_gradient_kernel(int64_t length, const float* input1, const float* in_grad, float *output) {
+  int y = blockIdx.x * blockDim.x + threadIdx.x;
+  if(y >= length) {
+    return;
+  }
+  output[y] = input1[y] >= 0.0f ? in_grad[y] : 0.0f;
+}
+
 __global__ void array_add_kernel(int64_t length, const float* input1, const float* input2, float *output) {
   int y = blockIdx.x * blockDim.x + threadIdx.x;
   if(y >= length) {
@@ -60,12 +102,28 @@ __global__ void array_add_kernel(int64_t length, const float* input1, const floa
   output[y] = input1[y] + input2[y];
 }
 
+__global__ void array_add_by_const_kernel(int64_t length, const float* input1, float value, float *output) {
+  int y = blockIdx.x * blockDim.x + threadIdx.x;
+  if(y >= length) {
+    return;
+  }
+  output[y] = input1[y] + value;
+}
+
 __global__ void array_mul_kernel(int64_t length, const float* input1, const float* input2, float *output) {
   int y = blockIdx.x * blockDim.x + threadIdx.x;
   if(y >= length) {
     return;
   }
   output[y] = input1[y] * input2[y];
+}
+
+__global__ void array_mul_by_const_kernel(int64_t length, const float* input1, float value, float *output) {
+  int y = blockIdx.x * blockDim.x + threadIdx.x;
+  if(y >= length) {
+    return;
+  }
+  output[y] = input1[y] * value;
 }
 
 __global__ void array_set_kernel(int64_t length, float value, float *output) {
@@ -121,6 +179,17 @@ int DLGpuMatrixElementwiseAdd(const DLArrayHandle matA,
 int DLGpuMatrixElementwiseAddByConst(const DLArrayHandle input, float val,
                                      DLArrayHandle output) {
   /* TODO: Your code here */
+  dim3 threads;
+  dim3 blocks;
+  int64_t length = 1;
+  for(int i = 0; i < output->ndim; i++) {
+    length *= output->shape[i];
+  }
+  if(length <= 1024) {
+    array_add_by_const_kernel<<<1, length>>>(length, (const float*)input->data, val, (float*)output->data);
+  } else {
+    array_add_by_const_kernel<<<length / 1024 + 1, 1024>>>(length, (const float*)input->data, val, (float*)output->data);
+  }
   return 0;
 }
 
@@ -145,6 +214,17 @@ int DLGpuMatrixElementwiseMultiply(const DLArrayHandle matA,
 int DLGpuMatrixMultiplyByConst(const DLArrayHandle input, float val,
                                DLArrayHandle output) {
   /* TODO: Your code here */
+  dim3 threads;
+  dim3 blocks;
+  int64_t length = 1;
+  for(int i = 0; i < output->ndim; i++) {
+    length *= output->shape[i];
+  }
+  if(length <= 1024) {
+    array_mul_by_const_kernel<<<1, length>>>(length, (const float*)input->data, val, (float*)output->data);
+  } else {
+    array_mul_by_const_kernel<<<length / 1024 + 1, 1024>>>(length, (const float*)input->data, val, (float*)output->data);
+  }
   return 0;
 }
 
@@ -159,17 +239,60 @@ int DLGpuMatrixMultiply(const DLArrayHandle matA, bool transposeA,
 
 int DLGpuRelu(const DLArrayHandle input, DLArrayHandle output) {
   /* TODO: Your code here */
+  dim3 threads;
+  dim3 blocks;
+  int64_t length = 1;
+  for(int i = 0; i < output->ndim; i++) {
+    length *= output->shape[i];
+  }
+  if(length <= 1024) {
+    array_relu_kernel<<<1, length>>>(length, (const float*)input->data, (float*)output->data);
+  } else {
+    array_relu_kernel<<<length / 1024 + 1, 1024>>>(length, (const float*)input->data, (float*)output->data);
+  }
   return 0;
 }
 
 int DLGpuReluGradient(const DLArrayHandle input, const DLArrayHandle in_grad,
                       DLArrayHandle output) {
   /* TODO: Your code here */
+  dim3 threads;
+  dim3 blocks;
+  int64_t length = 1;
+  for(int i = 0; i < output->ndim; i++) {
+    length *= output->shape[i];
+  }
+  if(length <= 1024) {
+    array_relu_gradient_kernel<<<1, length>>>(length, (const float*)input->data, (const float*)in_grad->data, (float*)output->data);
+  } else {
+    array_relu_gradient_kernel<<<length / 1024 + 1, 1024>>>(length, (const float*)input->data, (const float*)in_grad->data, (float*)output->data);
+  }
   return 0;
 }
 
 int DLGpuSoftmax(const DLArrayHandle input, DLArrayHandle output) {
   /* TODO: Your code here */
+  assert(input->ndim == 2);
+  assert(output->ndim == 2);
+  int nrow = input->shape[0];
+  // Maximum x- or y-dimension of a block = 1024
+  // But we need 'nrow' shared memory, and max shared memory is 48KB.
+  // Conservatively allow max 16KB shared memory.
+  assert(nrow <= 1024 * 4);
+  int ncol = input->shape[1];
+  const float *input_data_a = (const float *)input->data;
+  float *output_data = (float *)output->data;
+  dim3 threads;
+  if (nrow <= 1024) {
+    threads.x = nrow;
+  } else {
+    threads.x = 1024;
+    threads.y = (nrow + 1023) / 1024;
+  }
+  // 1 block, each block with 'threads' number of threads with 'nrow' shared
+  // memory size
+  matrix_softmax_kernel<<<1, threads, nrow * sizeof(float)>>>(
+      nrow, ncol, input_data_a, output_data);
   return 0;
 }
 
