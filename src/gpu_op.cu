@@ -52,7 +52,42 @@ __global__ void matrix_softmax_cross_entropy_kernel(int nrow, int ncol,
   }
 }
 
+__global__ void array_add_kernel(int64_t length, const float* input1, const float* input2, float *output) {
+  int y = blockIdx.x * blockDim.x + threadIdx.x;
+  if(y >= length) {
+    return;
+  }
+  output[y] = input1[y] + input2[y];
+}
+
+__global__ void array_mul_kernel(int64_t length, const float* input1, const float* input2, float *output) {
+  int y = blockIdx.x * blockDim.x + threadIdx.x;
+  if(y >= length) {
+    return;
+  }
+  output[y] = input1[y] * input2[y];
+}
+
+__global__ void array_set_kernel(int64_t length, float value, float *output) {
+  int y = blockIdx.x * blockDim.x + threadIdx.x;
+  if(y >= length) {
+    return;
+  }
+  output[y] = value;
+}
+
 int DLGpuArraySet(DLArrayHandle arr, float value) { /* TODO: Your code here */
+  dim3 threads;
+  dim3 blocks;
+  int64_t length = 1;
+  for(int i = 0; i < arr->ndim; i++) {
+    length *= arr->shape[i];
+  }
+  if(length <= 1024) {
+    array_set_kernel<<<1, length>>>(length, value, (float*)arr->data);
+  } else {
+    array_set_kernel<<<length / 1024 + 1, 1024>>>(length, value, (float*)arr->data);
+  }
   return 0;
 }
 
@@ -69,6 +104,17 @@ int DLGpuReduceSumAxisZero(const DLArrayHandle input, DLArrayHandle output) {
 int DLGpuMatrixElementwiseAdd(const DLArrayHandle matA,
                               const DLArrayHandle matB, DLArrayHandle output) {
   /* TODO: Your code here */
+  dim3 threads;
+  dim3 blocks;
+  int64_t length = 1;
+  for(int i = 0; i < output->ndim; i++) {
+    length *= output->shape[i];
+  }
+  if(length <= 1024) {
+    array_add_kernel<<<1, length>>>(length, (const float*)matA->data, (const float*)matB->data, (float*)output->data);
+  } else {
+    array_add_kernel<<<length / 1024 + 1, 1024>>>(length, (const float*)matA->data, (const float*)matB->data, (float*)output->data);
+  }
   return 0;
 }
 
@@ -82,6 +128,17 @@ int DLGpuMatrixElementwiseMultiply(const DLArrayHandle matA,
                                    const DLArrayHandle matB,
                                    DLArrayHandle output) {
   /* TODO: Your code here */
+  dim3 threads;
+  dim3 blocks;
+  int64_t length = 1;
+  for(int i = 0; i < output->ndim; i++) {
+    length *= output->shape[i];
+  }
+  if(length <= 1024) {
+    array_mul_kernel<<<1, length>>>(length, (const float*)matA->data, (const float*)matB->data, (float*)output->data);
+  } else {
+    array_mul_kernel<<<length / 1024 + 1, 1024>>>(length, (const float*)matA->data, (const float*)matB->data, (float*)output->data);
+  }
   return 0;
 }
 
