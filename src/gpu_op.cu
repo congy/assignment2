@@ -174,22 +174,22 @@ __global__ void reduce_sum_axis_zero_kernel(int64_t output_length, int reduce_si
   int x = threadIdx.x + blockIdx.x * blockDim.x;
   if(x >= output_length) return;
   float value = 0;
-  for(int i = 0; i < reduce_size; i++) {
+  for(int i = threadIdx.y; i < reduce_size; i+= blockDim.y) {
     value += input[i * output_length + x];
-    __syncthreads();
   }
-  output[x] = value;
+  atomicAdd(output + x, value);
 }
 
 
 int DLGpuReduceSumAxisZero(const DLArrayHandle input, DLArrayHandle output) {
   /* TODO: Your code here */
+  DLGpuArraySet(output, 0);
+
   int output_length = 1;
   for(int i = 0; i < output->ndim; i++) {
     output_length *= output->shape[i];
   }
-  printf("DLGpuReduceSumAxisZero : %d, %d\n", output_length, input->shape[0]);
-  reduce_sum_axis_zero_kernel<<<output_length / 1024 + 1, min(1024, output_length)>>>(output_length, input->shape[0], (float*)input->data, (float*)output->data);
+  reduce_sum_axis_zero_kernel<<<output_length / 64 + 1, dim3(min(64, output_length), 16)>>>(output_length, input->shape[0], (float*)input->data, (float*)output->data);
   return 0;
 }
 
