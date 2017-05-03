@@ -413,10 +413,10 @@ class ReduceSumAxisZeroOp(Op):
         """
         """TODO: Your code here"""
         s = input_shapes[0]
-        if len(s.shape) == 1:
+        if len(s) == 1:
             return (1,)
         else:
-            return s.shape[1:]
+            return s[1:]
 
 
 class BroadcastToOp(Op):
@@ -480,7 +480,7 @@ class SoftmaxCrossEntropyOp(Op):
 
     def infer_shape(self, node, input_shapes):
         """TODO: Your code here"""
-        return input_shapes[0]
+        return (1,)
 
 
 class SoftmaxOp(Op):
@@ -569,6 +569,31 @@ softmax_op = SoftmaxOp()
 relu_op = ReluOp()
 relu_gradient_op = ReluGradientOp()
 
+class MemoryPool(object):
+    def __init__(self, ctx):
+        self.ctx = ctx
+        self.allocated = dict()
+        self.used = set()
+
+    def reset(self):
+        self.used = set()
+
+    def alloc(self, shape):
+        # Check if there is available array
+        if shape in self.allocated:
+            for arr in self.allocated[shape]:
+                if arr not in self.used:
+                    # Available and not in use
+                    self.used.add(arr)
+                    return arr
+        # If not available, allocate a new one, and add it to the pool
+        arr = ndarray.empty(shape, ctx=self.ctx)
+        self.used.add(arr)
+        if shape not in self.allocated:
+            self.allocated[shape] = [ arr ]
+        else:
+            self.allocated[shape].append(arr)
+        return arr
 
 class Executor(object):
     """Executor computes values for given set of nodes in computation graph."""
@@ -589,6 +614,7 @@ class Executor(object):
         self.node_to_shape_map = None
         self.node_to_arr_map = None
         self.feed_shapes = None
+        self.pool = MemoryPool(ctx)
 
     def infer_shape(self, feed_shapes):
         """Given shapes of feed_dict nodes, infer shape for all nodes in graph.
@@ -607,7 +633,8 @@ class Executor(object):
             node_to_shape_map[pl] = feed_shapes[pl]
 
         for node in self.topo_order:
-            node_to_shape_map[node] = node.op.infer_shape(node, map(node_to_shape_map.__getitem__, node.inputs))
+            if node not in node_to_shape_map:
+                node_to_shape_map[node] = node.op.infer_shape(node, map(node_to_shape_map.__getitem__, node.inputs))
 
         self.node_to_shape_map = node_to_shape_map
 
@@ -631,8 +658,10 @@ class Executor(object):
         """
         """TODO: Your code here"""
         self.node_to_arr_map = dict()
+        self.pool.reset()
         for node in self.topo_order:
-            self.node_to_arr_map[node] = ndarray.empty(self.node_to_shape_map[node], ctx=self.ctx)
+            self.node_to_arr_map[node] = self.pool.alloc(self.node_to_shape_map[node])
+
 
     def run(self, feed_dict, convert_to_numpy_ret_vals=False):
         """

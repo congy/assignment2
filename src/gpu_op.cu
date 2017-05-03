@@ -149,13 +149,47 @@ int DLGpuArraySet(DLArrayHandle arr, float value) { /* TODO: Your code here */
   return 0;
 }
 
+__global__ void broadcast_to_kernel(int64_t input_length, const float* input, float *output) {
+  output += input_length * blockIdx.y;
+  int x = blockIdx.x * blockDim.x + threadIdx.x;
+  if(x < input_length) {
+    output[x] = input[x];
+  }
+}
+
 int DLGpuBroadcastTo(const DLArrayHandle input, DLArrayHandle output) {
   /* TODO: Your code here */
+  dim3 threads;
+  dim3 blocks;
+  int64_t input_length = 1;
+  for(int i = 0; i < input->ndim; i++) {
+    input_length *= input->shape[i];
+  }
+  broadcast_to_kernel<<<dim3(input_length / 1024 + 1, output->shape[0]), 1024>>>(input_length, (const float*)input->data, (float*)output->data);
   return 0;
 }
 
+
+__global__ void reduce_sum_axis_zero_kernel(int64_t output_length, int reduce_size, const float* input, float *output) {
+  int x = threadIdx.x + blockIdx.x * blockDim.x;
+  if(x >= output_length) return;
+  float value = 0;
+  for(int i = 0; i < reduce_size; i++) {
+    value += input[i * output_length + x];
+    __syncthreads();
+  }
+  output[x] = value;
+}
+
+
 int DLGpuReduceSumAxisZero(const DLArrayHandle input, DLArrayHandle output) {
   /* TODO: Your code here */
+  int output_length = 1;
+  for(int i = 0; i < output->ndim; i++) {
+    output_length *= output->shape[i];
+  }
+  printf("DLGpuReduceSumAxisZero : %d, %d\n", output_length, input->shape[0]);
+  reduce_sum_axis_zero_kernel<<<output_length / 1024 + 1, min(1024, output_length)>>>(output_length, input->shape[0], (float*)input->data, (float*)output->data);
   return 0;
 }
 
