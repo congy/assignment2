@@ -4,6 +4,19 @@
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
 
+int divupround(int a, int b) {
+  if(a % b == 0) return a / b;
+  return a / b + 1;
+}
+
+int64_t totallength(DLArrayHandle array) {
+  int64_t length = 1;
+  for(int i = 0; i < array->ndim; i++) {
+    length *= array->shape[i];
+  }
+  return length;
+}
+
 /* TODO: Your code here */
 /* all your GPU kernel code, e.g. matrix_softmax_cross_entropy_kernel */
 
@@ -134,21 +147,6 @@ __global__ void array_set_kernel(int64_t length, float value, float *output) {
   output[y] = value;
 }
 
-int DLGpuArraySet(DLArrayHandle arr, float value) { /* TODO: Your code here */
-  dim3 threads;
-  dim3 blocks;
-  int64_t length = 1;
-  for(int i = 0; i < arr->ndim; i++) {
-    length *= arr->shape[i];
-  }
-  if(length <= 1024) {
-    array_set_kernel<<<1, length>>>(length, value, (float*)arr->data);
-  } else {
-    array_set_kernel<<<length / 1024 + 1, 1024>>>(length, value, (float*)arr->data);
-  }
-  return 0;
-}
-
 __global__ void broadcast_to_kernel(int64_t input_length, const float* input, float *output) {
   output += input_length * blockIdx.y;
   int x = blockIdx.x * blockDim.x + threadIdx.x;
@@ -156,19 +154,6 @@ __global__ void broadcast_to_kernel(int64_t input_length, const float* input, fl
     output[x] = input[x];
   }
 }
-
-int DLGpuBroadcastTo(const DLArrayHandle input, DLArrayHandle output) {
-  /* TODO: Your code here */
-  dim3 threads;
-  dim3 blocks;
-  int64_t input_length = 1;
-  for(int i = 0; i < input->ndim; i++) {
-    input_length *= input->shape[i];
-  }
-  broadcast_to_kernel<<<dim3(input_length / 1024 + 1, output->shape[0]), 1024>>>(input_length, (const float*)input->data, (float*)output->data);
-  return 0;
-}
-
 
 __global__ void reduce_sum_axis_zero_kernel(int64_t output_length, int reduce_size, const float* input, float *output) {
   int x = threadIdx.x + blockIdx.x * blockDim.x;
@@ -180,50 +165,40 @@ __global__ void reduce_sum_axis_zero_kernel(int64_t output_length, int reduce_si
   atomicAdd(output + x, value);
 }
 
+int DLGpuArraySet(DLArrayHandle arr, float value) { /* TODO: Your code here */
+  int length = totallength(arr);
+  array_set_kernel<<<divupround(length, 1024), min(1024, length)>>>(length, value, (float*)arr->data);
+  return 0;
+}
+
+int DLGpuBroadcastTo(const DLArrayHandle input, DLArrayHandle output) {
+  /* TODO: Your code here */
+  int input_length = totallength(input);
+  broadcast_to_kernel<<<dim3(divupround(input_length, 1024), output->shape[0]), min(1024, input_length)>>>(input_length, (const float*)input->data, (float*)output->data);
+  return 0;
+}
 
 int DLGpuReduceSumAxisZero(const DLArrayHandle input, DLArrayHandle output) {
   /* TODO: Your code here */
   DLGpuArraySet(output, 0);
-
-  int output_length = 1;
-  for(int i = 0; i < output->ndim; i++) {
-    output_length *= output->shape[i];
-  }
-  reduce_sum_axis_zero_kernel<<<output_length / 64 + 1, dim3(min(64, output_length), 16)>>>(output_length, input->shape[0], (float*)input->data, (float*)output->data);
+  int output_length = totallength(output);
+  reduce_sum_axis_zero_kernel<<<divupround(output_length, 64), dim3(min(64, output_length), 16)>>>(output_length, input->shape[0], (float*)input->data, (float*)output->data);
   return 0;
 }
 
 int DLGpuMatrixElementwiseAdd(const DLArrayHandle matA,
                               const DLArrayHandle matB, DLArrayHandle output) {
   /* TODO: Your code here */
-  dim3 threads;
-  dim3 blocks;
-  int64_t length = 1;
-  for(int i = 0; i < output->ndim; i++) {
-    length *= output->shape[i];
-  }
-  if(length <= 1024) {
-    array_add_kernel<<<1, length>>>(length, (const float*)matA->data, (const float*)matB->data, (float*)output->data);
-  } else {
-    array_add_kernel<<<length / 1024 + 1, 1024>>>(length, (const float*)matA->data, (const float*)matB->data, (float*)output->data);
-  }
+  int64_t length = totallength(output);
+  array_add_kernel<<<divupround(length, 1024), min(length, 1024L)>>>(length, (const float*)matA->data, (const float*)matB->data, (float*)output->data);
   return 0;
 }
 
 int DLGpuMatrixElementwiseAddByConst(const DLArrayHandle input, float val,
                                      DLArrayHandle output) {
   /* TODO: Your code here */
-  dim3 threads;
-  dim3 blocks;
-  int64_t length = 1;
-  for(int i = 0; i < output->ndim; i++) {
-    length *= output->shape[i];
-  }
-  if(length <= 1024) {
-    array_add_by_const_kernel<<<1, length>>>(length, (const float*)input->data, val, (float*)output->data);
-  } else {
-    array_add_by_const_kernel<<<length / 1024 + 1, 1024>>>(length, (const float*)input->data, val, (float*)output->data);
-  }
+  int64_t length = totallength(output);
+  array_add_by_const_kernel<<<divupround(length, 1024), min(length, 1024L)>>>(length, (const float*)input->data, val, (float*)output->data);
   return 0;
 }
 
@@ -231,36 +206,20 @@ int DLGpuMatrixElementwiseMultiply(const DLArrayHandle matA,
                                    const DLArrayHandle matB,
                                    DLArrayHandle output) {
   /* TODO: Your code here */
-  dim3 threads;
-  dim3 blocks;
-  int64_t length = 1;
-  for(int i = 0; i < output->ndim; i++) {
-    length *= output->shape[i];
-  }
-  if(length <= 1024) {
-    array_mul_kernel<<<1, length>>>(length, (const float*)matA->data, (const float*)matB->data, (float*)output->data);
-  } else {
-    array_mul_kernel<<<length / 1024 + 1, 1024>>>(length, (const float*)matA->data, (const float*)matB->data, (float*)output->data);
-  }
+  int64_t length = totallength(output);
+  array_mul_kernel<<<divupround(length, 1024), min(length, 1024L)>>>(length, (const float*)matA->data, (const float*)matB->data, (float*)output->data);
   return 0;
 }
 
 int DLGpuMatrixMultiplyByConst(const DLArrayHandle input, float val,
                                DLArrayHandle output) {
   /* TODO: Your code here */
-  dim3 threads;
-  dim3 blocks;
-  int64_t length = 1;
-  for(int i = 0; i < output->ndim; i++) {
-    length *= output->shape[i];
-  }
-  if(length <= 1024) {
-    array_mul_by_const_kernel<<<1, length>>>(length, (const float*)input->data, val, (float*)output->data);
-  } else {
-    array_mul_by_const_kernel<<<length / 1024 + 1, 1024>>>(length, (const float*)input->data, val, (float*)output->data);
-  }
+  int64_t length = totallength(output);
+  array_mul_by_const_kernel<<<divupround(length, 1024), min(length, 1024L)>>>(length, (const float*)input->data, val, (float*)output->data);
   return 0;
 }
+
+cublasHandle_t cublas_handle = NULL;
 
 int DLGpuMatrixMultiply(const DLArrayHandle matA, bool transposeA,
                         const DLArrayHandle matB, bool transposeB,
@@ -271,14 +230,17 @@ int DLGpuMatrixMultiply(const DLArrayHandle matA, bool transposeA,
   // op(A) * op(B) = C
   // op(B)T * op(A)T = CT
 
-  cublasHandle_t handle;
+  if(!cublas_handle) {
+    cublasCreate(&cublas_handle);
+  }
+
   float one = 1.0f;
   float zero = 0.0f;
   int m = matC->shape[1];
   int n = matC->shape[0];
   int k = transposeA ? matA->shape[0] : matA->shape[1];
-  cublasCreate(&handle);
-  cublasSgemm(handle,
+
+  cublasSgemm(cublas_handle,
     transposeB ? CUBLAS_OP_T : CUBLAS_OP_N,
     transposeA ? CUBLAS_OP_T : CUBLAS_OP_N,
     m, n, k,
@@ -293,34 +255,16 @@ int DLGpuMatrixMultiply(const DLArrayHandle matA, bool transposeA,
 
 int DLGpuRelu(const DLArrayHandle input, DLArrayHandle output) {
   /* TODO: Your code here */
-  dim3 threads;
-  dim3 blocks;
-  int64_t length = 1;
-  for(int i = 0; i < output->ndim; i++) {
-    length *= output->shape[i];
-  }
-  if(length <= 1024) {
-    array_relu_kernel<<<1, length>>>(length, (const float*)input->data, (float*)output->data);
-  } else {
-    array_relu_kernel<<<length / 1024 + 1, 1024>>>(length, (const float*)input->data, (float*)output->data);
-  }
+  int64_t length = totallength(output);
+  array_relu_kernel<<<divupround(length, 1024), min(length, 1024L)>>>(length, (const float*)input->data, (float*)output->data);
   return 0;
 }
 
 int DLGpuReluGradient(const DLArrayHandle input, const DLArrayHandle in_grad,
                       DLArrayHandle output) {
   /* TODO: Your code here */
-  dim3 threads;
-  dim3 blocks;
-  int64_t length = 1;
-  for(int i = 0; i < output->ndim; i++) {
-    length *= output->shape[i];
-  }
-  if(length <= 1024) {
-    array_relu_gradient_kernel<<<1, length>>>(length, (const float*)input->data, (const float*)in_grad->data, (float*)output->data);
-  } else {
-    array_relu_gradient_kernel<<<length / 1024 + 1, 1024>>>(length, (const float*)input->data, (const float*)in_grad->data, (float*)output->data);
-  }
+  int64_t length = totallength(output);
+  array_relu_gradient_kernel<<<divupround(length, 1024), min(length, 1024L)>>>(length, (const float*)input->data, (const float*)in_grad->data, (float*)output->data);
   return 0;
 }
 
