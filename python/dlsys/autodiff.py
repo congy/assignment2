@@ -578,6 +578,9 @@ class MemoryPool(object):
     def reset(self):
         self.used = set()
 
+    def resetElement(self, array):
+        self.used.discard(array)
+
     def alloc(self, shape):
         # Check if there is available array
         if shape in self.allocated:
@@ -659,8 +662,19 @@ class Executor(object):
         """TODO: Your code here"""
         self.node_to_arr_map = dict()
         self.pool.reset()
-        for node in self.topo_order:
-            self.node_to_arr_map[node] = self.pool.alloc(self.node_to_shape_map[node])
+        discarded_nodes = set()
+        for i in range(len(self.topo_order)):
+            for x in self.topo_order[0:i]:
+                if x in self.eval_node_list: continue
+                if x in feed_shapes: continue
+                if all([ x not in y.inputs for y in self.topo_order[i:] ]):
+                    if x not in discarded_nodes:
+                        self.pool.resetElement(self.node_to_arr_map[x])
+                        discarded_nodes.add(x)
+
+            node = self.topo_order[i]
+            if node not in feed_shapes:
+                self.node_to_arr_map[node] = self.pool.alloc(self.node_to_shape_map[node])
 
 
     def run(self, feed_dict, convert_to_numpy_ret_vals=False):
